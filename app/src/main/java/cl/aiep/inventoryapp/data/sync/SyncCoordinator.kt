@@ -7,6 +7,8 @@ import android.net.NetworkCapabilities
 import android.net.NetworkRequest
 import cl.aiep.inventoryapp.data.local.LocalInventoryRepository
 import cl.aiep.inventoryapp.data.remote.FirestoreInventorySource
+import cl.aiep.inventoryapp.presentation.UserMessages
+import kotlin.coroutines.cancellation.CancellationException
 import com.google.firebase.firestore.ListenerRegistration
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
@@ -36,7 +38,7 @@ class SyncCoordinator(
     @OptIn(kotlinx.coroutines.FlowPreview::class)
     fun start() {
         if (work != null) return
-        status.value = "Conectando con Firestore…"
+        status.value = "Actualizando el catálogo…"
         val cm = context.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
         val callback = object : ConnectivityManager.NetworkCallback() {
             override fun onAvailable(network: Network) { syncRequests.trySend(Unit) }
@@ -45,18 +47,7 @@ class SyncCoordinator(
         cm.registerNetworkCallback(NetworkRequest.Builder()
             .addCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET).build(), callback)
 
-        subscription = remote.listen(
-            onProducts = { list, fromCache ->
-                scope.launch {
-                    try {
-                        list.forEach { local.mergeRemote(it) }
-                        status.value = if (fromCache) "Vista local de Firestore · esperando servidor" else
-                            if (canUpload) "Conectado · inventario actualizado" else "Conectado · acceso de solo lectura"
-                    } catch (e: Exception) { status.value = "Error al importar: ${e.message}" }
-                }
-            },
-            onError = { status.value = "Error en Firestore: ${it.message}" }
-        )
+        listenForUpdates()
         work = scope.launch {
             launch {
                 local.pendingCount.debounce(400).collect { if (canUpload && it > 0) syncRequests.trySend(Unit) }
@@ -66,24 +57,55 @@ class SyncCoordinator(
         syncRequests.trySend(Unit)
     }
 
-    fun retry() { syncRequests.trySend(Unit) }
+    private fun listenForUpdates() {
+        subscription?.remove()
+        subscription = remote.listen(
+            onProducts = { list, fromCache ->
+                scope.launch {
+                    try {
+                        list.forEach { local.mergeRemote(it) }
+                        status.value = when {
+                            fromCache -> "Mostrando productos guardados. Actualizaremos al conectar."
+                            canUpload -> "Inventario actualizado."
+                            else -> "Catálogo actualizado."
+                        }
+                    } catch (e: Exception) {
+                        if (e is CancellationException) throw e
+                        status.value = "No pudimos actualizar los productos guardados. Inténtalo de nuevo."
+                    }
+                }
+            },
+            onError = { error ->
+                status.value = UserMessages.inventory(error)
+                subscription?.remove()
+                subscription = null
+            }
+        )
+    }
+
+    fun retry() {
+        if (work == null) return
+        if (subscription == null) listenForUpdates()
+        syncRequests.trySend(Unit)
+    }
 
     private suspend fun flush() = mutex.withLock {
         if (!canUpload) return@withLock
         // No subir a la nube cambios pendientes creados bajo otra sesión del mismo dispositivo.
         val list = local.pending().filter { it.updatedBy == currentUid }
         if (list.isEmpty()) return@withLock
-        status.value = "Enviando ${list.size} cambio(s)…"
+        status.value = "Guardando cambios en la nube…"
         for (product in list) {
             try {
                 remote.upload(product)
                 local.acknowledge(product)
             } catch (e: Exception) {
-                status.value = "Pendiente de conexión: ${e.localizedMessage ?: "sin red"}"
+                if (e is CancellationException) throw e
+                status.value = UserMessages.upload(e)
                 return@withLock
             }
         }
-        status.value = "Cambios enviados a Firestore"
+        status.value = "Cambios compartidos con el equipo."
     }
 
     fun stop() {
@@ -94,6 +116,6 @@ class SyncCoordinator(
                 .unregisterNetworkCallback(it)
         }
         networkCallback = null
-        status.value = "Sin sesión de nube"
+        status.value = "Catálogo en modo local"
     }
 }

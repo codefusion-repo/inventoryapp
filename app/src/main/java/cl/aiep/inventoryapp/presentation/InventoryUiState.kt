@@ -25,6 +25,7 @@ data class InventoryUiState(
     val isGuest: Boolean get() = userEmail == null
     val canEditQuantity: Boolean get() = userEmail != null && InventoryPermissions.canEditQuantity(role)
     val canManage: Boolean get() = userEmail != null && InventoryPermissions.canManage(role)
+    val canUseStockShortcut: Boolean get() = userEmail != null && role == InventoryRole.VENDEDOR
     val canReadCloud: Boolean get() = cloudSessionActive
     val visible: List<InventoryProduct> get() = products.filter {
         (category == "Todos" || category == it.categoria) &&

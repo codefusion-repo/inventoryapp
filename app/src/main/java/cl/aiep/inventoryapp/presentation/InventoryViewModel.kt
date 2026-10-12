@@ -13,6 +13,7 @@ import cl.aiep.inventoryapp.domain.InventoryValidation
 import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.firestore.FirebaseFirestore
 import kotlinx.coroutines.Job
+import kotlin.coroutines.cancellation.CancellationException
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.update
@@ -26,7 +27,7 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
         InventoryUiState(
             firebaseConfigured = app.firebaseConfigured,
             firebaseDiagnostic = app.firebaseDiagnostic,
-            syncStatus = if (app.firebaseConfigured) "Preparando catálogo…" else "Catálogo local · Firebase sin configurar"
+            syncStatus = if (app.firebaseConfigured) "Preparando catálogo…" else "Puedes consultar los productos guardados en este dispositivo."
         )
     )
     val ui: StateFlow<InventoryUiState> = _ui
@@ -66,7 +67,7 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
     // pero no puede escribir ni crear un perfil de empleado.
     private fun startGuestSession() {
         val firebase = auth ?: run {
-            _ui.update { it.copy(cloudSessionActive = false, syncStatus = "Catálogo local · Firebase sin configurar") }
+            _ui.update { it.copy(cloudSessionActive = false, syncStatus = "Puedes consultar los productos guardados en este dispositivo.") }
             return
         }
         guestJob?.cancel()
@@ -75,7 +76,7 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
             _ui.update {
                 it.copy(userEmail = null, role = null, cloudSessionActive = false,
                     destination = InventoryDestination.PRODUCTOS,
-                    syncStatus = "Conectando al catálogo…")
+                    syncStatus = "Preparando el catálogo…")
             }
             try {
                 val guest = firebase.currentUser?.takeIf { it.isAnonymous }
@@ -86,9 +87,11 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
                 activateCoordinator(uid = guest.uid, role = null, canUpload = false)
                 _ui.update { it.copy(cloudSessionActive = true) }
             } catch (e: Exception) {
+                if (e is CancellationException) throw e
+                if (generation != sessionGeneration) return@launch
                 _ui.update { it.copy(
                     cloudSessionActive = false,
-                    syncStatus = "Solo datos guardados · ${e.localizedMessage ?: "no se pudo entrar como invitado"}"
+                    syncStatus = UserMessages.guest(e)
                 ) }
             }
         }
@@ -96,7 +99,7 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
 
     fun signIn(email: String, password: String) {
         if (!app.firebaseConfigured) {
-            _ui.update { it.copy(authError = app.firebaseDiagnostic) }
+            _ui.update { it.copy(authError = "El acceso para empleados aún no está disponible. Contacta al administrador.") }
             return
         }
         guestJob?.cancel()
@@ -108,9 +111,15 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
                 val user = requireNotNull(auth).signInWithEmailAndPassword(email.trim(), password).await().user
                     ?: error("Firebase no devolvió un usuario")
                 loadRoleAndStart(user.uid, user.email ?: email.trim())
+                val role = _ui.value.role
+                if (role != null) _ui.update {
+                    it.copy(message = if (role == InventoryRole.ALMACEN)
+                        "¡Bienvenido! Ya puedes administrar el inventario."
+                        else "¡Bienvenido! Ya puedes actualizar las existencias.")
+                }
             } catch (e: Exception) {
-                val reason = e.localizedMessage ?: "Error de autenticación"
-                _ui.update { it.copy(authError = "No se pudo iniciar sesión: $reason", syncStatus = "Error de autenticación") }
+                if (e is CancellationException) throw e
+                _ui.update { it.copy(authError = it.authError ?: UserMessages.login(e)) }
                 requireNotNull(auth).signOut()
                 startGuestSession()
             } finally {
@@ -127,7 +136,8 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
             _ui.update { it.copy(busy = true) }
             try { loadRoleAndStart(uid, email) }
             catch (e: Exception) {
-                _ui.update { it.copy(authError = "No se pudo cargar el perfil: ${e.localizedMessage}", syncStatus = "Perfil sin verificar") }
+                if (e is CancellationException) throw e
+                _ui.update { it.copy(authError = UserMessages.profile(e), syncStatus = "No pudimos validar tu acceso") }
                 auth?.signOut()
                 startGuestSession()
             } finally {
@@ -140,21 +150,27 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
         stopCoordinator()
         _ui.update {
             it.copy(role = null, userEmail = null, cloudSessionActive = false,
-                syncStatus = "Validando perfil en Firestore…")
+                syncStatus = "Comprobando tu acceso…")
         }
-        val profile = FirebaseFirestore.getInstance().collection("users").document(uid).get().await()
+        val profile = try {
+            FirebaseFirestore.getInstance().collection("users").document(uid).get().await()
+        } catch (e: Exception) {
+            if (e is CancellationException) throw e
+            _ui.update { it.copy(authError = UserMessages.profile(e)) }
+            throw e
+        }
         val role = InventoryRole.fromCloud(profile.getString("role"))
         if (role == null) {
             auth?.signOut()
             _ui.update { it.copy(
-                authError = "Tu cuenta no tiene un rol asignado (vendedor o almacén).",
-                syncStatus = "Falta perfil de usuario", role = null, userEmail = null
+                authError = "Tu cuenta todavía no tiene acceso al inventario. Solicita al administrador que habilite tu perfil.",
+                syncStatus = "Acceso pendiente de habilitación", role = null, userEmail = null
             ) }
             startGuestSession()
             return
         }
         _ui.update { it.copy(userEmail = email, role = role, authError = null,
-            syncStatus = "Conectando con Firestore…") }
+            syncStatus = "Actualizando tus productos…") }
         activateCoordinator(uid, role, InventoryPermissions.canEditQuantity(role))
         _ui.update { it.copy(cloudSessionActive = true) }
     }
@@ -188,40 +204,44 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
         stopCoordinator()
         auth?.signOut()
         _ui.update { it.copy(userEmail = null, role = null, cloudSessionActive = false,
-            authError = null, destination = InventoryDestination.PRODUCTOS) }
+            authError = null, destination = InventoryDestination.PRODUCTOS,
+            message = "Sesión cerrada. Puedes seguir explorando el catálogo.") }
         startGuestSession()
     }
 
     fun syncNow() {
         if (coordinator == null && _ui.value.isGuest) startGuestSession()
         else coordinator?.retry() ?: _ui.update {
-            it.copy(message = "Inicia sesión y valida tu perfil para sincronizar.")
+            it.copy(message = "Conectando al catálogo. Intenta actualizar de nuevo en un momento.")
         }
     }
 
     private fun verifyWriteAccess(): Boolean {
         if (_ui.value.canManage) return true
-        _ui.update { it.copy(message = "Acceso restringido: solo almacén puede modificar el inventario.") }
+        _ui.update { it.copy(message = "Para modificar este producto, ingresa con una cuenta de almacén.") }
         return false
     }
 
     fun updateQuantity(product: InventoryProduct, quantityText: String) {
         if (!InventoryPermissions.canEditQuantity(_ui.value.role) || _ui.value.userEmail == null) {
-            _ui.update { it.copy(message = "Debes iniciar sesión como vendedor o almacén para modificar existencias.") }
+            _ui.update { it.copy(message = "Inicia sesión como vendedor o almacén para cambiar las existencias.") }
             return
         }
         val quantity = quantityText.toIntOrNull()
         if (quantity == null || quantity < 0) {
-            _ui.update { it.copy(message = "La cantidad debe ser un entero igual o mayor que cero.") }
+            _ui.update { it.copy(message = "Ingresa una cantidad válida, sin decimales ni valores negativos.") }
             return
         }
         viewModelScope.launch {
             try {
                 val uid = auth?.currentUser?.uid ?: error("Sesión no disponible")
-                local.updateQuantity(product.id, quantity, uid)
-                _ui.update { it.copy(message = "Existencias actualizadas. Sincronización pendiente si no hay red.") }
+                val changed = local.updateQuantity(product.id, quantity, uid)
+                _ui.update { it.copy(message = if (changed)
+                    "Listo, guardamos las existencias de «${product.nombre}»."
+                    else "La cantidad de «${product.nombre}» ya estaba actualizada.") }
             } catch (e: Exception) {
-                _ui.update { it.copy(message = "No se pudieron modificar las existencias: ${e.localizedMessage}") }
+                if (e is CancellationException) throw e
+                _ui.update { it.copy(message = UserMessages.localSave(e)) }
             }
         }
     }
@@ -234,7 +254,7 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
         val qty = quantityText.toIntOrNull()
         val price = priceText.toLongOrNull()
         if (qty == null || price == null) {
-            _ui.update { it.copy(message = "Cantidad y precio deben ser números enteros.") }; return
+            _ui.update { it.copy(message = "Revisa la cantidad y el precio: deben ser números enteros.") }; return
         }
         val error = InventoryValidation.validate(name, supplier, qty, price)
         if (error != null) { _ui.update { it.copy(message = error) }; return }
@@ -242,9 +262,12 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
             try {
                 local.save(id, name, description, category, supplier, qty, price,
                     userId = auth?.currentUser?.uid ?: throw IllegalStateException("Sesión no disponible"))
-                _ui.update { it.copy(message = "Producto guardado. Se sincronizará al tener conexión.") }
+                _ui.update { it.copy(message = if (id == null)
+                    "¡Producto agregado! «${name.trim()}» ya está guardado en este dispositivo."
+                    else "Cambios guardados para «${name.trim()}». Se compartirán al sincronizar.") }
             } catch (e: Exception) {
-                _ui.update { it.copy(message = "No se pudo guardar: ${e.localizedMessage}") }
+                if (e is CancellationException) throw e
+                _ui.update { it.copy(message = UserMessages.localSave(e)) }
             }
         }
     }
@@ -253,9 +276,15 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
         if (!verifyWriteAccess()) return
         viewModelScope.launch {
             try {
-                local.softDelete(product.id, auth?.currentUser?.uid ?: throw IllegalStateException("Sesión no disponible"))
-                _ui.update { it.copy(message = "Producto dado de baja. Cambio pendiente de sincronización.") }
-            } catch (e: Exception) { _ui.update { it.copy(message = "Error al eliminar: ${e.message}") } }
+                val deleted = local.softDelete(product.id,
+                    auth?.currentUser?.uid ?: throw IllegalStateException("Sesión no disponible"))
+                _ui.update { it.copy(message = if (deleted)
+                    "«${product.nombre}» ya no aparece en el catálogo. Se reflejará en los demás dispositivos al sincronizar."
+                    else "Este producto ya estaba dado de baja.") }
+            } catch (e: Exception) {
+                if (e is CancellationException) throw e
+                _ui.update { it.copy(message = UserMessages.localSave(e)) }
+            }
         }
     }
 
@@ -267,7 +296,11 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
                 local.save(null, "Auriculares inalámbricos", "Bluetooth con estuche", "Audio", "AudioSur", 15, 18990, uid)
                 local.save(null, "Teclado mecánico", "Teclas retroiluminadas", "Accesorios", "TecnoChile", 3, 44990, uid)
                 local.save(null, "Notebook 14 pulgadas", "Equipo de demostración", "Computadores", "Distribuidora Norte", 7, 529990, uid)
-            } catch (e: Exception) { _ui.update { it.copy(message = "No se pudieron crear productos: ${e.message}") } }
+                _ui.update { it.copy(message = "Agregamos tres productos para comenzar.") }
+            } catch (e: Exception) {
+                if (e is CancellationException) throw e
+                _ui.update { it.copy(message = UserMessages.localSave(e)) }
+            }
         }
     }
 

@@ -20,20 +20,22 @@ class InventoryApplication : Application() {
 
     override fun onCreate() {
         super.onCreate()
-        // El plugin google-services genera google_app_id / project_id durante la build.
-        // FirebaseOptions.fromResource permite diferenciar configuración ausente de sesión cerrada.
-        val options = FirebaseOptions.fromResource(this)
-        if (options == null) {
-            firebaseDiagnostic = "Faltan recursos de Firebase. Verifica app/google-services.json, el applicationId cl.aiep.inventoryapp y vuelve a sincronizar Gradle."
-            return
-        }
-        val app = FirebaseApp.getApps(this).firstOrNull()
-            ?: FirebaseApp.initializeApp(this, options)
-        firebaseConfigured = app != null
-        firebaseDiagnostic = if (firebaseConfigured) {
-            "Firebase inicializado (proyecto: ${options.projectId ?: "sin identificador"}). Inicia sesión para comprobar acceso a Firestore."
-        } else {
-            "No fue posible inicializar Firebase. Revisa la configuración de Google Services."
+        // Recursos generados por el plugin google-services a partir de google-services.json.
+        try {
+            val options = FirebaseOptions.fromResource(this)
+            if (options == null) {
+                firebaseDiagnostic = "No se encontraron recursos de Firebase. Revisa google-services.json y sincroniza Gradle."
+                return
+            }
+            FirebaseApp.getApps(this).firstOrNull() ?: FirebaseApp.initializeApp(this, options)
+            firebaseConfigured = true
+            firebaseDiagnostic = "Firebase configurado para ${options.projectId ?: "un proyecto sin identificador"}."
+        } catch (_: IllegalStateException) {
+            firebaseConfigured = false
+            firebaseDiagnostic = "Firebase no pudo iniciarse. Revisa el archivo de configuración y los servicios disponibles."
+        } catch (_: IllegalArgumentException) {
+            firebaseConfigured = false
+            firebaseDiagnostic = "La configuración de Firebase parece inválida. Verifica el applicationId y google-services.json."
         }
     }
 }

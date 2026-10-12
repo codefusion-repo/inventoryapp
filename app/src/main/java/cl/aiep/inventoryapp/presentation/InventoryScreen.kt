@@ -53,7 +53,7 @@ fun InventoryScreen(vm: InventoryViewModel) {
     }
     LaunchedEffect(ui.canManage, ui.canEditQuantity) {
         if (!ui.canManage) { editorVisible = false; deleting = null }
-        if (!ui.canEditQuantity) editingQuantity = null
+        if (!ui.canUseStockShortcut) editingQuantity = null
     }
 
     Scaffold(
@@ -114,7 +114,7 @@ fun InventoryScreen(vm: InventoryViewModel) {
     if (showLogin) LoginDialog(
         onDismiss = { showLogin = false }, onLogin = vm::signIn,
         busy = ui.busy, configured = ui.firebaseConfigured,
-        diagnostic = ui.firebaseDiagnostic, error = ui.authError
+        error = ui.authError
     )
 
     if (editorVisible && ui.canManage) {
@@ -125,7 +125,7 @@ fun InventoryScreen(vm: InventoryViewModel) {
             })
     }
 
-    editingQuantity?.takeIf { ui.canEditQuantity }?.let { product ->
+    editingQuantity?.takeIf { ui.canUseStockShortcut }?.let { product ->
         QuantityEditor(product = product, onDismiss = { editingQuantity = null }, onSave = { quantity ->
             vm.updateQuantity(product, quantity)
             editingQuantity = null
@@ -151,7 +151,7 @@ fun InventoryScreen(vm: InventoryViewModel) {
         AlertDialog(
             onDismissRequest = { deleting = null },
             title = { Text("Dar de baja producto") },
-            text = { Text("¿Dar de baja ${product.nombre}? La operación se replicará a Firestore cuando haya conexión.") },
+            text = { Text("¿Quieres dar de baja «${product.nombre}»? Dejará de aparecer en el catálogo. El cambio llegará a los demás dispositivos cuando se sincronice.") },
             confirmButton = { TextButton(onClick = { vm.delete(product); deleting = null }) { Text("Dar de baja") } },
             dismissButton = { TextButton(onClick = { deleting = null }) { Text("Cancelar") } }
         )
@@ -214,8 +214,8 @@ private fun ProductsContent(
                 Card(colors = CardDefaults.cardColors(containerColor = Mint), shape = RoundedCornerShape(18.dp)) {
                     Row(Modifier.fillMaxWidth().padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
                         Column(Modifier.weight(1f)) {
-                            Text("Estás explorando como invitado", color = Ink, fontWeight = FontWeight.SemiBold)
-                            Text("Explora el catálogo actualizado. Inicia sesión para gestionar existencias.",
+                            Text("Bienvenido al catálogo", color = Ink, fontWeight = FontWeight.SemiBold)
+                            Text("Puedes consultar productos sin registrarte. Para gestionar el inventario, inicia sesión.",
                                 fontSize = 12.sp, color = Teal)
                         }
                         Spacer(Modifier.width(8.dp))
@@ -258,17 +258,17 @@ private fun ProductsContent(
                         verticalArrangement = Arrangement.spacedBy(9.dp)) {
                         Icon(Icons.Default.Inventory2, null, tint = Teal, modifier = Modifier.size(38.dp))
                         Text("Todavía no hay productos", fontWeight = FontWeight.Bold)
-                        Text(if (ui.isGuest) "Todavía no hay productos disponibles. Comprueba la conexión al catálogo."
-                            else "Almacén puede crear productos y sincronizarlos con el equipo.", color = Color.Gray, fontSize = 12.sp)
+                        Text(if (ui.isGuest) "Aún no encontramos productos. Prueba a actualizar el catálogo dentro de un momento."
+                            else "Todavía no hay productos. Almacén puede añadir el primero.", color = Color.Gray, fontSize = 12.sp)
                         if (ui.canManage) OutlinedButton(onClick = vm::addDemo) { Text("Añadir 3 productos de ejemplo") }
                     }
                 }
             }
         } else if (ui.visible.isEmpty()) {
-            item { Text("No se encontraron productos con esos filtros.", color = Color.Gray) }
+            item { Text("No encontramos productos con esa búsqueda. Prueba otra palabra o categoría.", color = Color.Gray) }
         } else {
             items(ui.visible, key = { it.id }) { product ->
-                ProductCard(product, isGuest = ui.isGuest, canEditQuantity = ui.canEditQuantity,
+                ProductCard(product, isGuest = ui.isGuest, canUseStockShortcut = ui.canUseStockShortcut,
                     canManage = ui.canManage, editQuantity = { onQuantity(product) },
                     edit = { onEdit(product) }, delete = { onDelete(product) }, details = { onDetail(product) })
             }
@@ -289,8 +289,8 @@ private fun AccountContent(ui: InventoryUiState, vm: InventoryViewModel, onLogin
                     Text("Acceso actual", style = MaterialTheme.typography.titleMedium, color = Navy)
                     Text(ui.userEmail ?: "Sin sesión iniciada", color = Ink)
                     Text("Rol: ${ui.role?.label ?: "No asignado"}", color = Teal, fontWeight = FontWeight.SemiBold)
-                    Text(if (ui.canManage) "Puedes crear, editar y dar de baja productos, y actualizar sus existencias."
-                        else if (ui.canEditQuantity) "Puedes consultar productos y modificar únicamente sus existencias."
+                    Text(if (ui.canManage) "Puedes administrar productos y existencias desde la opción Editar, o dar de baja productos."
+                        else if (ui.canEditQuantity) "Puedes consultar los productos y actualizar sus cantidades disponibles."
                         else "Puedes consultar el catálogo compartido. Inicia sesión para gestionar existencias.",
                         style = MaterialTheme.typography.bodySmall)
                     if (ui.userEmail == null) {
@@ -305,9 +305,15 @@ private fun AccountContent(ui: InventoryUiState, vm: InventoryViewModel, onLogin
         item {
             Card(colors = CardDefaults.cardColors(containerColor = Color.White), shape = RoundedCornerShape(20.dp)) {
                 Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(9.dp)) {
-                    Text("Estado de Firebase", fontWeight = FontWeight.Bold, color = Navy)
-                    Text(ui.firebaseDiagnostic, style = MaterialTheme.typography.bodySmall)
-                    Text("La configuración local y la conexión a Firestore son comprobaciones distintas.",
+                    Text("Conexión con el inventario", fontWeight = FontWeight.Bold, color = Navy)
+                    Text(if (ui.firebaseConfigured) "Firebase está preparado para conectar tu cuenta."
+                        else "El catálogo online aún no está configurado en este dispositivo.",
+                        style = MaterialTheme.typography.bodySmall)
+                    var showTechnicalDetails by remember { mutableStateOf(false) }
+                    TextButton(onClick = { showTechnicalDetails = !showTechnicalDetails }) {
+                        Text(if (showTechnicalDetails) "Ocultar detalles" else "Ver detalles técnicos")
+                    }
+                    if (showTechnicalDetails) Text(ui.firebaseDiagnostic,
                         style = MaterialTheme.typography.bodySmall, color = Color.Gray)
                 }
             }
@@ -336,12 +342,27 @@ private fun HeroPanel(title: String, subtitle: String) {
 private fun SyncBanner(ui: InventoryUiState, onRefresh: () -> Unit) {
     Card(shape = RoundedCornerShape(16.dp), colors = CardDefaults.cardColors(containerColor = Mint)) {
         Row(Modifier.fillMaxWidth().padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
-            Icon(if (ui.syncStatus.startsWith("Conectado")) Icons.Default.CloudDone else Icons.Default.CloudOff, null, tint = Teal)
+            val isCloudCurrent = ui.cloudSessionActive && (
+                ui.syncStatus == "Inventario actualizado." ||
+                ui.syncStatus == "Catálogo actualizado." ||
+                ui.syncStatus == "Cambios compartidos con el equipo."
+            )
+            Icon(if (isCloudCurrent) Icons.Default.CloudDone else Icons.Default.CloudOff,
+                contentDescription = null, tint = Teal)
             Spacer(Modifier.width(10.dp))
             Column(Modifier.weight(1f)) {
                 Text(ui.syncStatus, fontSize = 12.sp, fontWeight = FontWeight.SemiBold, color = Ink)
-                Text("${ui.pending} cambios pendientes · ${if (ui.canManage) "Edición habilitada" else "Solo lectura"}",
-                    fontSize = 11.sp, color = Teal)
+                val pendingLabel = when (ui.pending) {
+                    0 -> "Sin cambios locales pendientes"
+                    1 -> "1 cambio local por sincronizar"
+                    else -> "${ui.pending} cambios locales por sincronizar"
+                }
+                val accessLabel = when {
+                    ui.canManage -> "Administración habilitada"
+                    ui.canUseStockShortcut -> "Puedes actualizar existencias"
+                    else -> "Consulta habilitada"
+                }
+                Text("$pendingLabel · $accessLabel", fontSize = 11.sp, color = Teal)
             }
             IconButton(onClick = onRefresh, enabled = ui.canReadCloud) {
                 Icon(Icons.Default.Refresh, "Sincronizar", tint = Teal)
@@ -361,7 +382,7 @@ private fun Metric(label: String, value: String, modifier: Modifier = Modifier) 
 }
 
 @Composable
-private fun ProductCard(product: InventoryProduct, isGuest: Boolean, canEditQuantity: Boolean,
+private fun ProductCard(product: InventoryProduct, isGuest: Boolean, canUseStockShortcut: Boolean,
     canManage: Boolean, editQuantity: () -> Unit, edit: () -> Unit, delete: () -> Unit, details: () -> Unit) {
     Card(shape = RoundedCornerShape(20.dp), colors = CardDefaults.cardColors(containerColor = Color.White),
         modifier = Modifier.fillMaxWidth()) {
@@ -396,14 +417,32 @@ private fun ProductCard(product: InventoryProduct, isGuest: Boolean, canEditQuan
                     Spacer(Modifier.width(8.dp))
                     Text("Pendiente", color = Color(0xFFB66B1B), fontSize = 11.sp)
                 }
-                Spacer(Modifier.weight(1f))
-                TextButton(onClick = details) { Text("Ver detalle") }
-                if (canEditQuantity) {
-                    TextButton(onClick = editQuantity) { Text("Actualizar stock") }
+            }
+            // Fila independiente para las acciones: el botón de baja permanece visible.
+            if (!canManage) {
+                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween) {
+                    TextButton(onClick = details) { Text("Ver detalle") }
+                    if (canUseStockShortcut) {
+                        TextButton(onClick = editQuantity) { Text("Actualizar stock") }
+                    }
                 }
-                if (canManage) {
-                    IconButton(onClick = edit) { Icon(Icons.Default.Edit, contentDescription = "Editar ${product.nombre}", tint = Teal) }
-                    IconButton(onClick = delete) { Icon(Icons.Default.DeleteOutline, contentDescription = "Eliminar ${product.nombre}", tint = Color(0xFFB42318)) }
+            }
+            if (canManage) {
+                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween) {
+                    TextButton(onClick = details) { Text("Ver detalle") }
+                    TextButton(onClick = edit) {
+                        Icon(Icons.Default.Edit, contentDescription = null, modifier = Modifier.size(17.dp))
+                        Spacer(Modifier.width(4.dp))
+                        Text("Editar")
+                    }
+                    TextButton(onClick = delete, colors = ButtonDefaults.textButtonColors(
+                        contentColor = MaterialTheme.colorScheme.error)) {
+                        Icon(Icons.Default.DeleteOutline, contentDescription = null, modifier = Modifier.size(17.dp))
+                        Spacer(Modifier.width(4.dp))
+                        Text("Dar de baja")
+                    }
                 }
             }
         }
@@ -412,7 +451,7 @@ private fun ProductCard(product: InventoryProduct, isGuest: Boolean, canEditQuan
 
 @Composable
 private fun LoginDialog(onDismiss: () -> Unit, onLogin: (String, String) -> Unit,
-    busy: Boolean, configured: Boolean, diagnostic: String, error: String?
+    busy: Boolean, configured: Boolean, error: String?
 ) {
     var email by remember { mutableStateOf("") }
     var password by remember { mutableStateOf("") }
@@ -420,8 +459,8 @@ private fun LoginDialog(onDismiss: () -> Unit, onLogin: (String, String) -> Unit
         title = { Text("Acceso a la nube") },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                Text(if (configured) "Ingresa con una cuenta creada en Firebase Authentication."
-                    else "Firebase no está configurado. $diagnostic",
+                Text(if (configured) "Ingresa con tu cuenta de trabajo para gestionar el inventario."
+                    else "Por ahora puedes consultar el catálogo. La conexión para empleados aún no está disponible.",
                     style = MaterialTheme.typography.bodySmall)
                 OutlinedTextField(email, { email = it }, label = { Text("Correo electrónico") },
                     singleLine = true, modifier = Modifier.fillMaxWidth())
@@ -433,9 +472,9 @@ private fun LoginDialog(onDismiss: () -> Unit, onLogin: (String, String) -> Unit
         },
         confirmButton = {
             Button(onClick = { onLogin(email, password) }, enabled = configured && !busy &&
-                email.isNotBlank() && password.isNotBlank()) { Text("Conectar") }
+                email.isNotBlank() && password.isNotBlank()) { Text(if (busy) "Ingresando…" else "Iniciar sesión") }
         },
-        dismissButton = { TextButton(onClick = onDismiss) { Text("Continuar sin nube") } })
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Seguir como invitado") } })
 }
 
 @Composable
@@ -448,7 +487,7 @@ private fun QuantityEditor(product: InventoryProduct, onDismiss: () -> Unit, onS
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 Text(product.nombre, fontWeight = FontWeight.SemiBold)
-                Text("Solo puedes modificar la cantidad disponible de este producto.",
+                Text("Indica cuántas unidades hay disponibles. Los demás datos no cambiarán.",
                     style = MaterialTheme.typography.bodySmall)
                 OutlinedTextField(quantity, onValueChange = { quantity = it }, singleLine = true,
                     label = { Text("Cantidad de unidades") },
@@ -458,7 +497,7 @@ private fun QuantityEditor(product: InventoryProduct, onDismiss: () -> Unit, onS
                     color = MaterialTheme.colorScheme.error, fontSize = 12.sp)
             }
         },
-        confirmButton = { Button(onClick = { onSave(quantity) }, enabled = valid) { Text("Guardar cantidad") } },
+        confirmButton = { Button(onClick = { onSave(quantity) }, enabled = valid) { Text("Guardar existencias") } },
         dismissButton = { TextButton(onClick = onDismiss) { Text("Cancelar") } }
     )
 }

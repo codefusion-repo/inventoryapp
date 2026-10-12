@@ -6,7 +6,7 @@ Aplicación Android para gestionar inventario de productos electrónicos, con op
 
 - Inventario consultable con búsqueda, filtros y alertas de stock bajo.
 - Alta, edición completa y baja lógica de productos desde almacén.
-- Actualización de existencias por vendedores y almacén.
+- Actualización rápida de existencias por vendedores; almacén gestiona las cantidades desde el editor completo.
 - Consulta de la misma colección de Firestore por visitantes con autenticación anónima (solo lectura).
 - Persistencia local con Room (SQLite) y sincronización con Firestore.
 - Resumen de existencias, cambios pendientes y estado de sincronización.
@@ -36,7 +36,7 @@ Después de crear cada cuenta en Firebase Authentication, añade manualmente un 
 .\gradlew assembleDebug
 ```
 
-Al iniciar, Firebase Authentication crea o reutiliza una sesión anónima para leer `inventory_products`. Room mantiene la última vista disponible sin internet. Sin Firebase configurado o sin red/caché, el catálogo puede aparecer vacío. El vendedor puede actualizar exclusivamente cantidades; almacén administra productos. La sincronización requiere un perfil de Firebase reconocido. Un rol obtenido previamente desde la caché de Firestore puede permitir editar sin red; todas las escrituras remotas son verificadas nuevamente por las reglas del servidor.
+Al iniciar, Firebase Authentication crea o reutiliza una sesión anónima para leer `inventory_products`. Room mantiene la última vista disponible sin internet. Sin Firebase configurado o sin red/caché, el catálogo puede aparecer vacío. El vendedor puede actualizar exclusivamente cantidades; almacén administra productos. La sincronización de escrituras requiere un perfil de Firebase reconocido. Un rol obtenido previamente desde la caché de Firestore puede permitir editar sin red; todas las escrituras remotas son verificadas nuevamente por las reglas del servidor.
 
 **Limitaciones:** el prototipo utiliza marcas de tiempo del dispositivo para resolver conflictos (no garantiza consistencia transaccional entre ediciones simultáneas). No incluye auditoría, permisos por sucursal ni conciliación de stock. La base local debe considerarse información interna y no está cifrada mediante una capa adicional de la app.
 
