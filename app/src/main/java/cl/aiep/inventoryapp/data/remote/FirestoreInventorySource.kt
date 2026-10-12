@@ -30,7 +30,7 @@ class FirestoreInventorySource(private val firestore: FirebaseFirestore, private
     }
 
     fun listen(
-        onProducts: (List<InventoryProduct>) -> Unit,
+        onProducts: (List<InventoryProduct>, Boolean) -> Unit,
         onError: (Exception) -> Unit
     ): ListenerRegistration = collection.addSnapshotListener(MetadataChanges.INCLUDE) { snap, error ->
         if (error != null) {
@@ -40,7 +40,7 @@ class FirestoreInventorySource(private val firestore: FirebaseFirestore, private
         // Ignorar datos locales de Firestore que aún no fueron confirmados por servidor.
         val ready = snap?.documents?.filter { !it.metadata.hasPendingWrites() } ?: emptyList()
         val mapped = ready.mapNotNull { it.toProduct() }
-        onProducts(mapped)
+        onProducts(mapped, snap?.metadata?.isFromCache ?: true)
     }
 
     private fun DocumentSnapshot.toProduct(): InventoryProduct? {

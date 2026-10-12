@@ -10,5 +10,3 @@ local.properties
 *.keystore
 *.key
 **/google-services.json
-!**/google-services.example.json
-captures/

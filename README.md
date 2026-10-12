@@ -1,75 +1,39 @@
 # InventoryApp
 
-Prototipo académico Android de **gestión de inventario de productos electrónicos**, desarrollado para **Taller de aplicaciones móviles (AIEP, semana 3)**.
+Aplicación Android para gestionar inventario de productos electrónicos, con operación offline y sincronización a Cloud Firestore.
 
-**Identidad:** `InventoryApp` · `cl.aiep.inventoryapp` · interfaz 100 % en español.
+## Funciones
 
-## Funcionalidades
+- Inventario consultable con búsqueda, filtros y alertas de stock bajo.
+- Creación, edición y baja lógica de productos desde el perfil de almacén.
+- Acceso de solo lectura para vendedores.
+- Persistencia local con Room (SQLite) y sincronización con Firestore.
+- Resumen de existencias, cambios pendientes y estado de sincronización.
 
-- Crear, consultar, editar y dar de baja productos con nombre, descripción, categoría, proveedor, cantidad y precio CLP.
-- Consultar todo el inventario, buscar y filtrar categorías, ver métricas y bajo stock.
-- **SQLite mediante Room** como fuente de datos de la interfaz (funciona sin internet).
-- **Cloud Firestore** para el inventario compartido entre dos usuarios autenticados.
-- Sincronización local → nube de cambios pendientes; nube → Room por listener de Firestore.
-- Eliminar mediante **baja lógica** (`deleted=true`), evitando que un dispositivo desconectado recupere elementos borrados al reanudarse.
-- Indicador de estado de sincronización y contador de operaciones pendientes.
-- Pruebas unitarias de validación de productos y política de aceptación de actualizaciones.
+## Stack
 
-## Importante: alcance y seguridad
+Kotlin · Jetpack Compose · Material 3 · Room · Firebase Authentication · Cloud Firestore · Corrutinas/Flow.
 
-El proyecto está preparado para **simulación académica**, no para inventario comercial en producción.
-La política de conflictos usa marcas de tiempo del dispositivo; **no es una solución transaccional fuerte** y puede fallar cuando los relojes difieren. Las reglas de demostración permiten escritura a *cualquier cuenta autenticada*; en producción harían falta roles, reglas más estrictas, auditoría y reconciliación en servidor.
+## Accesos
 
-No publicamos usuarios reales, contraseñas ni `google-services.json`.
+| Rol | Consultar | Crear/editar/dar de baja |
+|---|---|---|
+| Vendedor | Sí | No |
+| Encargado de almacén | Sí | Sí |
 
-## Requisitos
+Los roles provienen de `users/{uid}` en Firestore y están protegidos por [`firestore.rules`](firestore.rules). No se asignan desde el cliente.
 
-- Android Studio con **JDK 17**, Android **SDK Platform 37**, API mínima **23**; Gradle 9.x (Wrapper del template).
-- Proyecto Android nuevo **Empty Activity**, Kotlin, package `cl.aiep.inventoryapp`.
-- Conexión a Firebase (opcional para compilar la versión local, necesaria para evidencias en nube).
-- El paquete contiene Gradle del proyecto y módulo. **No incluye Gradle Wrapper JAR**: consérvalo del proyecto creado por Android Studio.
+## Configuración
 
-## Primer arranque
+Se requiere Android SDK 37, JDK 17 y `app/google-services.json` correspondiente al `applicationId` `cl.aiep.inventoryapp` (archivo excluido de Git). Habilita **Email/Password** en Firebase Authentication y publica las reglas incluidas.
 
-1. Crea un proyecto `InventoryApp` con **Empty Activity** en Android Studio.
-2. Mantén los archivos de Gradle Wrapper generados por el IDE (`gradlew`, `gradlew.bat`, `gradle/wrapper`).
-3. Copia encima los archivos de este paquete, **reemplazando por completo el módulo `app/`** y los scripts Gradle raíz, sin borrar el Wrapper.
-4. Abre `File > Sync Project with Gradle Files` y compila.
-5. Sin Firebase, la app arranca en **modo local** con Room. Carga tres productos demo o registra productos manualmente.
-6. Para sincronización entre usuarios, sigue [`docs/CONFIGURAR_FIREBASE.md`](docs/CONFIGURAR_FIREBASE.md).
-
-### Comandos de comprobación (PowerShell)
+Después de crear cada cuenta en Firebase Authentication, añade manualmente un documento `users/{uid}` con el campo `role` igual a `vendedor` o `almacen`. Estos documentos no pueden crearse desde la app.
 
 ```powershell
 .\gradlew testDebugUnitTest
 .\gradlew assembleDebug
 ```
 
-**Estos comandos deben ejecutarse en tu ordenador.** El ZIP no implica que ya se hayan ejecutado ni que Firebase esté configurado.
+La app puede consultar datos locales sin sesión. La edición y sincronización requieren una cuenta de almacén con perfil reconocido. Un rol obtenido previamente desde la caché de Firestore puede permitir editar sin red; todas las escrituras remotas son verificadas nuevamente por las reglas del servidor.
 
-## Estructura
-
-```text
-app/src/main/java/cl/aiep/inventoryapp/
-├── InventoryApplication.kt
-├── MainActivity.kt
-├── domain/               # modelos, validación y política de conflictos
-├── data/local/           # entidad, DAO, base Room y repositorio
-├── data/remote/          # adaptador Firebase Cloud Firestore
-├── data/sync/            # coordinación de cambios + conectividad
-└── presentation/         # ViewModel, UI Compose y tema
-```
-
-## Documentación
-
-- [Configurar Firebase](docs/CONFIGURAR_FIREBASE.md)
-- [Arquitectura y límites](docs/ARQUITECTURA.md)
-- [Guía de capturas para informe](docs/CAPTURAS_SEMANA3.md)
-- [Checklist de rúbrica](docs/CHECKLIST_RUBRICA.md)
-
-## Referencias oficiales
-
-- [Android Room](https://developer.android.com/training/data-storage/room)
-- [Firebase Cloud Firestore](https://firebase.google.com/docs/firestore)
-- [Firebase Authentication](https://firebase.google.com/docs/auth/android/password-auth)
-- [Database Inspector](https://developer.android.com/studio/inspect/database)
+**Limitaciones:** el prototipo utiliza marcas de tiempo del dispositivo para resolver conflictos (no garantiza consistencia transaccional entre ediciones simultáneas). No incluye auditoría, permisos por sucursal ni conciliación de stock. La base local debe considerarse información interna y no está cifrada mediante una capa adicional de la app.
