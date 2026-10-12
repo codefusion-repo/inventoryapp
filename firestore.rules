@@ -1,0 +1,43 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // SOLO PARA LA SIMULACIÓN ACADÉMICA.
+    // Las cuentas deben crearse manualmente en Firebase Authentication;
+    // no habilitar registro público sin incorporar permisos y roles.
+    match /inventory_products/{productId} {
+      function signedIn() { return request.auth != null; }
+      function validData() {
+        return request.resource.data.keys().hasOnly([
+            'id', 'nombre', 'descripcion', 'categoria', 'proveedor',
+            'cantidad', 'precioClp', 'updatedAtMillis', 'changeId',
+            'updatedBy', 'deleted', 'serverUpdatedAt'
+          ])
+          && request.resource.data.keys().hasAll([
+            'id', 'nombre', 'descripcion', 'categoria', 'proveedor',
+            'cantidad', 'precioClp', 'updatedAtMillis', 'changeId',
+            'updatedBy', 'deleted', 'serverUpdatedAt'
+          ])
+          && request.resource.data.id == productId
+          && request.resource.data.nombre is string
+          && request.resource.data.nombre.size() >= 2
+          && request.resource.data.descripcion is string
+          && request.resource.data.categoria is string
+          && request.resource.data.proveedor is string
+          && request.resource.data.proveedor.size() >= 1
+          && request.resource.data.cantidad is int
+          && request.resource.data.cantidad >= 0
+          && request.resource.data.precioClp is int
+          && request.resource.data.precioClp >= 0
+          && request.resource.data.updatedAtMillis is int
+          && request.resource.data.changeId is string
+          && request.resource.data.updatedBy == request.auth.uid
+          && request.resource.data.deleted is bool
+          && request.resource.data.serverUpdatedAt is timestamp;
+      }
+      allow get, list: if signedIn();
+      allow create, update: if signedIn() && validData();
+      // Se implementa soft delete para que todos los dispositivos observen la baja.
+      allow delete: if false;
+    }
+  }
+}
