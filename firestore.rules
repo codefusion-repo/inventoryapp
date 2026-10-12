@@ -1,11 +1,30 @@
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
-    // SOLO PARA LA SIMULACIÓN ACADÉMICA.
-    // Las cuentas deben crearse manualmente en Firebase Authentication;
-    // no habilitar registro público sin incorporar permisos y roles.
+    function signedIn() {
+      return request.auth != null;
+    }
+    function hasProfile() {
+      return signedIn() && exists(/databases/$(database)/documents/users/$(request.auth.uid));
+    }
+    function role() {
+      return get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role;
+    }
+    function canRead() {
+      return hasProfile() && role() in ['vendedor', 'almacen'];
+    }
+    function canWrite() {
+      return hasProfile() && role() == 'almacen';
+    }
+
+    // Los perfiles se crean desde Firebase Console por el administrador del proyecto.
+    // El cliente no puede asignarse ni modificar su propio rol.
+    match /users/{userId} {
+      allow get: if signedIn() && request.auth.uid == userId;
+      allow list, create, update, delete: if false;
+    }
+
     match /inventory_products/{productId} {
-      function signedIn() { return request.auth != null; }
       function validData() {
         return request.resource.data.keys().hasOnly([
             'id', 'nombre', 'descripcion', 'categoria', 'proveedor',
@@ -32,11 +51,12 @@ service cloud.firestore {
           && request.resource.data.changeId is string
           && request.resource.data.updatedBy == request.auth.uid
           && request.resource.data.deleted is bool
-          && request.resource.data.serverUpdatedAt is timestamp;
+          && request.resource.data.serverUpdatedAt == request.time;
       }
-      allow get, list: if signedIn();
-      allow create, update: if signedIn() && validData();
-      // Se implementa soft delete para que todos los dispositivos observen la baja.
+
+      allow get, list: if canRead();
+      allow create, update: if canWrite() && validData();
+      // Baja lógica: la eliminación definitiva impediría replicar el cambio.
       allow delete: if false;
     }
   }

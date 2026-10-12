@@ -2,12 +2,8 @@ plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.plugin.compose")
     id("com.google.devtools.ksp")
-}
-
-// Permite compilar y verificar Room sin un proyecto Firebase configurado.
-// Cuando agregues app/google-services.json, Sync de Gradle activa Firestore.
-if (file("google-services.json").exists()) {
-    apply(plugin = "com.google.gms.google-services")
+    // Siempre se ejecuta: evita builds en que se copie el JSON pero falten los recursos de Firebase.
+    id("com.google.gms.google-services")
 }
 
 android {
@@ -18,8 +14,8 @@ android {
         applicationId = "cl.aiep.inventoryapp"
         minSdk = 23
         targetSdk = 36
-        versionCode = 1
-        versionName = "1.0.0"
+        versionCode = 2
+        versionName = "1.1.0"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 

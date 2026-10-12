@@ -1,6 +1,7 @@
 package cl.aiep.inventoryapp.data.remote
 
 import cl.aiep.inventoryapp.domain.InventoryProduct
+import cl.aiep.inventoryapp.domain.InventoryRole
 import com.google.firebase.firestore.DocumentSnapshot
 import com.google.firebase.firestore.FieldValue
 import com.google.firebase.firestore.FirebaseFirestore
@@ -8,10 +9,15 @@ import com.google.firebase.firestore.ListenerRegistration
 import com.google.firebase.firestore.MetadataChanges
 import kotlinx.coroutines.tasks.await
 
-class FirestoreInventorySource(private val firestore: FirebaseFirestore, private val signedInUid: String) {
+class FirestoreInventorySource(
+    private val firestore: FirebaseFirestore,
+    private val signedInUid: String,
+    private val role: InventoryRole?
+) {
     private val collection = firestore.collection("inventory_products")
 
     suspend fun upload(product: InventoryProduct) {
+        check(role != null) { "Una sesión de invitado no puede enviar cambios." }
         val payload: Map<String, Any> = mapOf(
             "id" to product.id,
             "nombre" to product.nombre,
@@ -26,11 +32,22 @@ class FirestoreInventorySource(private val firestore: FirebaseFirestore, private
             "deleted" to product.deleted,
             "serverUpdatedAt" to FieldValue.serverTimestamp()
         )
-        collection.document(product.id).set(payload).await()
+        if (role == InventoryRole.VENDEDOR) {
+            // update() conserva íntegros los atributos que solo almacén puede editar.
+            collection.document(product.id).update(mapOf(
+                "cantidad" to product.cantidad,
+                "updatedAtMillis" to product.updatedAtMillis,
+                "changeId" to product.changeId,
+                "updatedBy" to signedInUid,
+                "serverUpdatedAt" to FieldValue.serverTimestamp()
+            )).await()
+        } else {
+            collection.document(product.id).set(payload).await()
+        }
     }
 
     fun listen(
-        onProducts: (List<InventoryProduct>) -> Unit,
+        onProducts: (List<InventoryProduct>, Boolean) -> Unit,
         onError: (Exception) -> Unit
     ): ListenerRegistration = collection.addSnapshotListener(MetadataChanges.INCLUDE) { snap, error ->
         if (error != null) {
@@ -40,7 +57,7 @@ class FirestoreInventorySource(private val firestore: FirebaseFirestore, private
         // Ignorar datos locales de Firestore que aún no fueron confirmados por servidor.
         val ready = snap?.documents?.filter { !it.metadata.hasPendingWrites() } ?: emptyList()
         val mapped = ready.mapNotNull { it.toProduct() }
-        onProducts(mapped)
+        onProducts(mapped, snap?.metadata?.isFromCache ?: true)
     }
 
     private fun DocumentSnapshot.toProduct(): InventoryProduct? {

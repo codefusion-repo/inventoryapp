@@ -29,6 +29,23 @@ class LocalInventoryRepository(private val db: InventoryDatabase) {
         }
     }
 
+    /** Cambia únicamente las existencias; nunca reescribe precio, proveedor u otros atributos. */
+    suspend fun updateQuantity(id: String, quantity: Int, userId: String) {
+        require(quantity >= 0) { "La cantidad no puede ser negativa." }
+        db.withTransaction {
+            val current = dao.findById(id) ?: throw IllegalArgumentException("Producto no encontrado")
+            require(!current.deleted) { "El producto está dado de baja." }
+            if (current.cantidad == quantity) return@withTransaction
+            dao.upsert(current.copy(
+                cantidad = quantity,
+                pendingSync = true,
+                updatedAtMillis = maxOf(System.currentTimeMillis(), current.updatedAtMillis + 1),
+                changeId = UUID.randomUUID().toString(),
+                updatedBy = userId
+            ))
+        }
+    }
+
     suspend fun softDelete(id: String, userId: String) {
         db.withTransaction {
             val current = dao.findById(id) ?: return@withTransaction

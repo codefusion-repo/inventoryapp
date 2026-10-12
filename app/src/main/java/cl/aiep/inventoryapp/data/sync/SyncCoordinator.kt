@@ -22,7 +22,9 @@ class SyncCoordinator(
     private val context: Context,
     private val local: LocalInventoryRepository,
     private val remote: FirestoreInventorySource,
-    private val scope: CoroutineScope
+    private val scope: CoroutineScope,
+    private val canUpload: Boolean,
+    private val currentUid: String
 ) {
     val status = MutableStateFlow("Sincronización detenida")
     private var subscription: ListenerRegistration? = null
@@ -44,11 +46,12 @@ class SyncCoordinator(
             .addCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET).build(), callback)
 
         subscription = remote.listen(
-            onProducts = { list ->
+            onProducts = { list, fromCache ->
                 scope.launch {
                     try {
                         list.forEach { local.mergeRemote(it) }
-                        status.value = "Conectado · datos actualizados"
+                        status.value = if (fromCache) "Vista local de Firestore · esperando servidor" else
+                            if (canUpload) "Conectado · inventario actualizado" else "Conectado · acceso de solo lectura"
                     } catch (e: Exception) { status.value = "Error al importar: ${e.message}" }
                 }
             },
@@ -56,7 +59,7 @@ class SyncCoordinator(
         )
         work = scope.launch {
             launch {
-                local.pendingCount.debounce(400).collect { if (it > 0) syncRequests.trySend(Unit) }
+                local.pendingCount.debounce(400).collect { if (canUpload && it > 0) syncRequests.trySend(Unit) }
             }
             for (request in syncRequests) flush()
         }
@@ -66,7 +69,9 @@ class SyncCoordinator(
     fun retry() { syncRequests.trySend(Unit) }
 
     private suspend fun flush() = mutex.withLock {
-        val list = local.pending()
+        if (!canUpload) return@withLock
+        // No subir a la nube cambios pendientes creados bajo otra sesión del mismo dispositivo.
+        val list = local.pending().filter { it.updatedBy == currentUid }
         if (list.isEmpty()) return@withLock
         status.value = "Enviando ${list.size} cambio(s)…"
         for (product in list) {
