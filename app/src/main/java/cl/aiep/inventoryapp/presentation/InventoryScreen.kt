@@ -25,11 +25,14 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import cl.aiep.inventoryapp.domain.ExternalImportDraft
 import cl.aiep.inventoryapp.domain.InventoryProduct
+import cl.aiep.inventoryapp.domain.toImportDraft
 import cl.aiep.inventoryapp.domain.InventoryValidation
 import cl.aiep.inventoryapp.presentation.theme.*
 import java.text.NumberFormat
 import java.util.Locale
+import androidx.compose.material.icons.automirrored.filled.Login
 
 private val categories = listOf("Todos", "Computadores", "Accesorios", "Audio", "Otros")
 private fun money(value: Long) = "${'$'}" + NumberFormat.getIntegerInstance(Locale.forLanguageTag("es-CL")).format(value)
@@ -40,6 +43,7 @@ fun InventoryScreen(vm: InventoryViewModel) {
     var showLogin by remember { mutableStateOf(false) }
     var editorVisible by remember { mutableStateOf(false) }
     var editing by remember { mutableStateOf<InventoryProduct?>(null) }
+    var importing by remember { mutableStateOf<ExternalImportDraft?>(null) }
     var deleting by remember { mutableStateOf<InventoryProduct?>(null) }
     var editingQuantity by remember { mutableStateOf<InventoryProduct?>(null) }
     var detail by remember { mutableStateOf<InventoryProduct?>(null) }
@@ -52,7 +56,7 @@ fun InventoryScreen(vm: InventoryViewModel) {
         if (ui.userEmail != null) showLogin = false
     }
     LaunchedEffect(ui.canManage, ui.canEditQuantity) {
-        if (!ui.canManage) { editorVisible = false; deleting = null }
+        if (!ui.canManage) { editorVisible = false; deleting = null; importing = null }
         if (!ui.canUseStockShortcut) editingQuantity = null
     }
 
@@ -61,11 +65,15 @@ fun InventoryScreen(vm: InventoryViewModel) {
         snackbarHost = { SnackbarHost(snack) },
         bottomBar = {
             if (!ui.isGuest) NavigationBar(containerColor = Color.White) {
-                listOf(
+                val tabs = listOf(
                     Triple(InventoryDestination.RESUMEN, "Resumen", Icons.Default.Home),
-                    Triple(InventoryDestination.PRODUCTOS, "Productos", Icons.Default.Inventory2),
+                    Triple(InventoryDestination.PRODUCTOS, "Productos", Icons.Default.Inventory2)
+                ) + (if (ui.canManage) listOf(
+                    Triple(InventoryDestination.EXTERNOS, "Externos", Icons.Default.CloudDownload)
+                ) else emptyList()) + listOf(
                     Triple(InventoryDestination.CUENTA, "Cuenta", Icons.Default.Person)
-                ).forEach { (to, label, icon) ->
+                )
+                tabs.forEach { (to, label, icon) ->
                     NavigationBarItem(
                         selected = ui.destination == to,
                         onClick = { vm.navigate(to) },
@@ -96,7 +104,7 @@ fun InventoryScreen(vm: InventoryViewModel) {
                     SuggestionChip(onClick = { vm.navigate(InventoryDestination.CUENTA) },
                         label = { Text(ui.role?.label ?: "Validando rol") })
                 } else {
-                    TextButton(onClick = { showLogin = true }) { Icon(Icons.Default.Login, null); Spacer(Modifier.width(5.dp)); Text("Ingresar") }
+                    TextButton(onClick = { showLogin = true }) { Icon(Icons.AutoMirrored.Filled.Login, contentDescription = null); Spacer(Modifier.width(5.dp)); Text("Ingresar") }
                 }
             }
             when (ui.destination) {
@@ -104,8 +112,18 @@ fun InventoryScreen(vm: InventoryViewModel) {
                 InventoryDestination.PRODUCTOS -> ProductsContent(ui, vm,
                     onLogin = { showLogin = true },
                     onQuantity = { editingQuantity = it },
-                    onEdit = { product -> editing = product; editorVisible = true },
+                    onEdit = { product -> editing = product; importing = null; editorVisible = true },
                     onDelete = { product -> deleting = product }, onDetail = { detail = it })
+                InventoryDestination.EXTERNOS -> if (ui.canManage) {
+                    ExternalCatalogScreen(ui,
+                        selectCategory = vm::selectExternalCategory,
+                        retry = vm::loadExternalProducts,
+                        importProduct = { product ->
+                            editing = null
+                            importing = product.toImportDraft()
+                            editorVisible = true
+                        })
+                }
                 InventoryDestination.CUENTA -> AccountContent(ui, vm, onLogin = { showLogin = true })
             }
         }
@@ -118,10 +136,13 @@ fun InventoryScreen(vm: InventoryViewModel) {
     )
 
     if (editorVisible && ui.canManage) {
-        ProductEditor(product = editing, onDismiss = { editorVisible = false },
+        ProductEditor(product = editing, draft = importing,
+            onDismiss = { editorVisible = false; importing = null },
             onSave = { name, description, category, supplier, qty, price ->
                 vm.save(editing?.id, name, description, category, supplier, qty, price)
                 editorVisible = false
+                if (importing != null) vm.navigate(InventoryDestination.PRODUCTOS)
+                importing = null
             })
     }
 
@@ -503,24 +524,47 @@ private fun QuantityEditor(product: InventoryProduct, onDismiss: () -> Unit, onS
 }
 
 @Composable
-private fun ProductEditor(product: InventoryProduct?, onDismiss: () -> Unit,
+private fun ProductEditor(product: InventoryProduct?, draft: ExternalImportDraft? = null,
+    onDismiss: () -> Unit,
     onSave: (String, String, String, String, String, String) -> Unit
 ) {
-    var name by remember(product?.id) { mutableStateOf(product?.nombre ?: "") }
-    var description by remember(product?.id) { mutableStateOf(product?.descripcion ?: "") }
-    var supplier by remember(product?.id) { mutableStateOf(product?.proveedor ?: "") }
-    var category by remember(product?.id) { mutableStateOf(product?.categoria ?: "Accesorios") }
-    var quantity by remember(product?.id) { mutableStateOf(product?.cantidad?.toString() ?: "0") }
-    var price by remember(product?.id) { mutableStateOf(product?.precioClp?.toString() ?: "0") }
-    val error = if (quantity.toIntOrNull() == null || price.toLongOrNull() == null)
+    var name by remember(product?.id, draft?.externalId) {
+        mutableStateOf(product?.nombre ?: draft?.name ?: "")
+    }
+    var description by remember(product?.id, draft?.externalId) {
+        mutableStateOf(product?.descripcion ?: draft?.description ?: "")
+    }
+    var supplier by remember(product?.id, draft?.externalId) {
+        mutableStateOf(product?.proveedor ?: draft?.supplier ?: "")
+    }
+    var category by remember(product?.id, draft?.externalId) {
+        mutableStateOf(product?.categoria ?: draft?.category ?: "Accesorios")
+    }
+    var quantity by remember(product?.id, draft?.externalId) {
+        mutableStateOf(product?.cantidad?.toString() ?: draft?.quantityText ?: "0")
+    }
+    var price by remember(product?.id, draft?.externalId) {
+        mutableStateOf(product?.precioClp?.toString() ?: draft?.priceClpText ?: "0")
+    }
+    val error = if (draft != null && price.isBlank())
+        "Ingresa el precio de venta en pesos chilenos antes de incorporar el producto."
+    else if (quantity.toIntOrNull() == null || price.toLongOrNull() == null)
         "Cantidad y precio deben ser números enteros."
     else InventoryValidation.validate(name, supplier, quantity.toInt(), price.toLong())
 
     AlertDialog(onDismissRequest = onDismiss,
-        title = { Text(if (product == null) "Nuevo producto" else "Editar producto") },
+        title = { Text(when {
+            product != null -> "Editar producto"
+            draft != null -> "Incorporar producto"
+            else -> "Nuevo producto"
+        }) },
         text = {
             Column(Modifier.fillMaxWidth().heightIn(max = 410.dp).verticalScroll(rememberScrollState()),
                 verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                if (draft != null) Text(
+                    "Producto consultado por REST/JSON. Confirma el precio en CLP y las existencias; no se convierte USD automáticamente.",
+                    fontSize = 12.sp, color = Teal
+                )
                 OutlinedTextField(name, { name = it }, label = { Text("Nombre") }, modifier = Modifier.fillMaxWidth(), singleLine = true)
                 OutlinedTextField(description, { description = it }, label = { Text("Descripción") },
                     modifier = Modifier.fillMaxWidth(), maxLines = 2)

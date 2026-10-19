@@ -4,8 +4,11 @@ import android.app.Application
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import cl.aiep.inventoryapp.InventoryApplication
+import cl.aiep.inventoryapp.data.external.ExternalCatalogRepository
+import cl.aiep.inventoryapp.data.external.ExternalCatalogErrorMessages
 import cl.aiep.inventoryapp.data.remote.FirestoreInventorySource
 import cl.aiep.inventoryapp.data.sync.SyncCoordinator
+import cl.aiep.inventoryapp.domain.ExternalCatalogCategory
 import cl.aiep.inventoryapp.domain.InventoryPermissions
 import cl.aiep.inventoryapp.domain.InventoryProduct
 import cl.aiep.inventoryapp.domain.InventoryRole
@@ -23,6 +26,8 @@ import kotlinx.coroutines.tasks.await
 class InventoryViewModel(application: Application) : AndroidViewModel(application) {
     private val app = application as InventoryApplication
     private val local = app.repository
+    private val externalCatalog = ExternalCatalogRepository()
+    private var externalJob: Job? = null
     private val _ui = MutableStateFlow(
         InventoryUiState(
             firebaseConfigured = app.firebaseConfigured,
@@ -56,8 +61,48 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
         }
     }
 
-    fun navigate(to: InventoryDestination) = _ui.update {
-        it.copy(destination = if (it.userEmail == null) InventoryDestination.PRODUCTOS else to)
+    fun navigate(to: InventoryDestination) {
+        val current = _ui.value
+        val allowed = when {
+            current.isGuest -> InventoryDestination.PRODUCTOS
+            to == InventoryDestination.EXTERNOS && !current.canManage -> InventoryDestination.PRODUCTOS
+            else -> to
+        }
+        _ui.update { it.copy(destination = allowed) }
+        if (allowed == InventoryDestination.EXTERNOS && !current.externalLoaded && !current.externalLoading) {
+            loadExternalProducts()
+        }
+    }
+
+    fun selectExternalCategory(category: ExternalCatalogCategory) {
+        if (!_ui.value.canManage) return
+        _ui.update { it.copy(externalCategory = category) }
+        loadExternalProducts()
+    }
+
+    fun loadExternalProducts() {
+        if (!_ui.value.canManage) return
+        externalJob?.cancel()
+        val category = _ui.value.externalCategory
+        externalJob = viewModelScope.launch {
+            _ui.update {
+                it.copy(externalLoading = true, externalLoaded = false,
+                    externalError = null, externalProducts = emptyList())
+            }
+            try {
+                val products = externalCatalog.getProducts(category)
+                _ui.update {
+                    it.copy(externalProducts = products, externalLoading = false,
+                        externalLoaded = true, externalError = null)
+                }
+            } catch (e: Exception) {
+                if (e is CancellationException) throw e
+                _ui.update {
+                    it.copy(externalProducts = emptyList(), externalLoading = false,
+                        externalLoaded = false, externalError = ExternalCatalogErrorMessages.explain(e))
+                }
+            }
+        }
     }
     fun search(value: String) = _ui.update { it.copy(search = value) }
     fun category(value: String) = _ui.update { it.copy(category = value) }
@@ -66,6 +111,9 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
     // El visitante recibe un token anónimo para consultar la misma colección,
     // pero no puede escribir ni crear un perfil de empleado.
     private fun startGuestSession() {
+        externalJob?.cancel()
+        _ui.update { it.copy(externalProducts = emptyList(), externalLoaded = false,
+            externalLoading = false, externalError = null) }
         val firebase = auth ?: run {
             _ui.update { it.copy(cloudSessionActive = false, syncStatus = "Puedes consultar los productos guardados en este dispositivo.") }
             return
@@ -169,7 +217,12 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
             startGuestSession()
             return
         }
+        if (role != cl.aiep.inventoryapp.domain.InventoryRole.ALMACEN) externalJob?.cancel()
         _ui.update { it.copy(userEmail = email, role = role, authError = null,
+            destination = InventoryDestination.PRODUCTOS,
+            externalProducts = if (role == cl.aiep.inventoryapp.domain.InventoryRole.ALMACEN) it.externalProducts else emptyList(),
+            externalLoaded = role == cl.aiep.inventoryapp.domain.InventoryRole.ALMACEN && it.externalLoaded,
+            externalLoading = false,
             syncStatus = "Actualizando tus productos…") }
         activateCoordinator(uid, role, InventoryPermissions.canEditQuantity(role))
         _ui.update { it.copy(cloudSessionActive = true) }
@@ -198,6 +251,7 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
     }
 
     fun logout() {
+        externalJob?.cancel()
         guestJob?.cancel(); guestJob = null
         sessionGeneration++
         roleJob?.cancel(); roleJob = null
@@ -305,6 +359,7 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
     }
 
     override fun onCleared() {
+        externalJob?.cancel()
         guestJob?.cancel()
         sessionGeneration++
         roleJob?.cancel()

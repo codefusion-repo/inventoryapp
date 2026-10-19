@@ -1,10 +1,12 @@
 package cl.aiep.inventoryapp.presentation
 
+import cl.aiep.inventoryapp.domain.ExternalCatalogCategory
+import cl.aiep.inventoryapp.domain.ExternalCatalogProduct
 import cl.aiep.inventoryapp.domain.InventoryPermissions
 import cl.aiep.inventoryapp.domain.InventoryProduct
 import cl.aiep.inventoryapp.domain.InventoryRole
 
-enum class InventoryDestination { RESUMEN, PRODUCTOS, CUENTA }
+enum class InventoryDestination { RESUMEN, PRODUCTOS, EXTERNOS, CUENTA }
 
 data class InventoryUiState(
     val products: List<InventoryProduct> = emptyList(),
@@ -20,7 +22,12 @@ data class InventoryUiState(
     val syncStatus: String = "Modo local",
     val busy: Boolean = false,
     val authError: String? = null,
-    val message: String? = null
+    val message: String? = null,
+    val externalCategory: ExternalCatalogCategory = ExternalCatalogCategory.LAPTOPS,
+    val externalProducts: List<ExternalCatalogProduct> = emptyList(),
+    val externalLoading: Boolean = false,
+    val externalLoaded: Boolean = false,
+    val externalError: String? = null
 ) {
     val isGuest: Boolean get() = userEmail == null
     val canEditQuantity: Boolean get() = userEmail != null && InventoryPermissions.canEditQuantity(role)
