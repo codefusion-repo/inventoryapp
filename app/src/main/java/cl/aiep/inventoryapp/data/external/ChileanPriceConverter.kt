@@ -14,8 +14,13 @@ object ChileanPriceConverter {
         if (!usd.isFinite() || usd < 0.0 || clpPerUsd == null ||
             !clpPerUsd.isFinite() || clpPerUsd <= 0.0) return null
         return try {
+            // Precio externo referencial: redondear al múltiplo de $100 CLP más cercano.
+            // Se usa BigDecimal para evitar imprecisiones de Float/Double al redondear.
+            val hundred = BigDecimal.valueOf(100L)
             BigDecimal.valueOf(usd).multiply(BigDecimal.valueOf(clpPerUsd))
-                .setScale(0, RoundingMode.HALF_UP).longValueExact()
+                .divide(hundred, 0, RoundingMode.HALF_UP)
+                .multiply(hundred)
+                .longValueExact()
         } catch (_: ArithmeticException) { null }
     }
 

@@ -36,13 +36,13 @@ class ExternalCatalogRepositoryTest {
             assertEquals(1, products.size)
             assertEquals("Notebook portátil", products.single().name)
             assertEquals(599.99, products.single().priceUsd, 0.001)
-            assertEquals(569991L, products.single().priceClp)
+            assertEquals(570000L, products.single().priceClp)
             assertEquals("https://example.com/photo.jpg", products.single().thumbnailUrl)
             assertEquals("/products/category/laptops?limit=20", server.takeRequest().path)
             val draft = products.single().toImportDraft()
             assertEquals("Computadores", draft.category)
             assertEquals("Fabricante A", draft.supplier)
-            assertEquals("569991", draft.priceClpText)
+            assertEquals("570000", draft.priceClpText)
             assertEquals("", draft.quantityText)
         }
     }

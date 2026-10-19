@@ -9,7 +9,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.CloudDownload
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.ShoppingBag
@@ -31,11 +31,8 @@ import cl.aiep.inventoryapp.presentation.theme.Mint
 import cl.aiep.inventoryapp.presentation.theme.Navy
 import cl.aiep.inventoryapp.presentation.theme.Teal
 import coil.compose.AsyncImage
-import java.text.NumberFormat
-import java.util.Locale
 
-private fun priceClp(value: Long?): String = if (value == null) "Precio no disponible"
-    else "$" + NumberFormat.getIntegerInstance(Locale.forLanguageTag("es-CL")).format(value)
+private fun priceClp(value: Long?): String = value?.let(::formatClp) ?: "Precio no disponible"
 
 /** Explorar es público; solo almacén puede confirmar un alta en el inventario interno. */
 @Composable
@@ -192,7 +189,10 @@ private fun ExternalProductDetail(product: ExternalCatalogProduct, canManage: Bo
         .padding(horizontal = 18.dp, vertical = 12.dp),
         verticalArrangement = Arrangement.spacedBy(15.dp)) {
         TextButton(onClick = onBack) {
-            Icon(Icons.Default.ArrowBack, contentDescription = null)
+            Icon(
+    imageVector = Icons.AutoMirrored.Filled.ArrowBack,
+    contentDescription = null
+)
             Spacer(Modifier.width(6.dp))
             Text("Volver a productos")
         }

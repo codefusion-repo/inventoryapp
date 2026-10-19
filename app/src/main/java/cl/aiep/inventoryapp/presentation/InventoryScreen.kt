@@ -31,11 +31,9 @@ import cl.aiep.inventoryapp.domain.InventoryProduct
 import cl.aiep.inventoryapp.domain.toImportDraft
 import cl.aiep.inventoryapp.domain.InventoryValidation
 import cl.aiep.inventoryapp.presentation.theme.*
-import java.text.NumberFormat
-import java.util.Locale
 
 private val categories = listOf("Todos", "Computadores", "Accesorios", "Audio", "Otros")
-private fun money(value: Long) = "${'$'}" + NumberFormat.getIntegerInstance(Locale.forLanguageTag("es-CL")).format(value)
+private fun money(value: Long): String = formatClp(value)
 
 @Composable
 fun InventoryScreen(vm: InventoryViewModel) {
@@ -612,6 +610,9 @@ private fun ImportConfirmationDialog(
                 OutlinedTextField(
                     value = price, onValueChange = { price = it },
                     label = { Text("Precio de venta (CLP)") },
+                    supportingText = {
+                        Text(priceValue?.let(::formatClp) ?: "Ingresa el monto en pesos, sin puntos ni comas")
+                    },
                     singleLine = true,
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                     modifier = Modifier.fillMaxWidth()

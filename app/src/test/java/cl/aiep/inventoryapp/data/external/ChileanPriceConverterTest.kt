@@ -8,9 +8,11 @@ import java.util.Locale
 import java.util.TimeZone
 
 class ChileanPriceConverterTest {
-    @Test fun `redondea al peso chileno más cercano`() {
-        assertEquals(569991L, ChileanPriceConverter.toClp(599.99, 950.0))
-        assertEquals(9315L, ChileanPriceConverter.toClp(9.5, 980.5))
+    @Test fun `redondea estimaciones al centenar de pesos mas cercano`() {
+        assertEquals(570000L, ChileanPriceConverter.toClp(599.99, 950.0))
+        assertEquals(9300L, ChileanPriceConverter.toClp(9.5, 980.5))
+        assertEquals(10100L, ChileanPriceConverter.toClp(10.05, 1000.0))
+        assertEquals(10000L, ChileanPriceConverter.toClp(10.04, 1000.0))
     }
 
     @Test fun `rechaza valores imposibles o sin cotizacion`() {
