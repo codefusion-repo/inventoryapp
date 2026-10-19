@@ -1,13 +1,16 @@
 package cl.aiep.inventoryapp.domain
 
-/** Modelo de productos externos: el precio se expresa en dólares estadounidenses (USD). */
+/** Datos externos: solo el precio convertido a CLP se presenta a usuarios. */
 data class ExternalCatalogProduct(
     val externalId: Int,
     val name: String,
     val description: String,
     val supplier: String,
     val priceUsd: Double,
-    val category: ExternalCatalogCategory
+    val category: ExternalCatalogCategory,
+    val priceClp: Long? = null,
+    val thumbnailUrl: String? = null,
+    val rating: Double? = null
 )
 
 enum class ExternalCatalogCategory(
@@ -21,14 +24,14 @@ enum class ExternalCatalogCategory(
     ACCESSORIES("mobile-accessories", "Accesorios", "Accesorios")
 }
 
-/** Precarga sin stock ni precio CLP: esos valores deben confirmarse localmente. */
+/** La cantidad requiere confirmación explícita; el precio CLP se precarga si existe cotización. */
 data class ExternalImportDraft(
     val externalId: Int,
     val name: String,
     val description: String,
     val supplier: String,
     val category: String,
-    val quantityText: String = "0",
+    val quantityText: String = "",
     val priceClpText: String = ""
 )
 
@@ -37,5 +40,6 @@ fun ExternalCatalogProduct.toImportDraft() = ExternalImportDraft(
     name = name,
     description = description,
     supplier = supplier,
-    category = category.inventoryCategory
+    category = category.inventoryCategory,
+    priceClpText = priceClp?.toString().orEmpty()
 )

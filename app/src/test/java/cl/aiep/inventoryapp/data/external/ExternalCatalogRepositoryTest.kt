@@ -7,6 +7,7 @@ import okhttp3.mockwebserver.MockResponse
 import okhttp3.mockwebserver.MockWebServer
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import retrofit2.HttpException
@@ -14,30 +15,46 @@ import retrofit2.Retrofit
 import retrofit2.converter.gson.GsonConverterFactory
 
 class ExternalCatalogRepositoryTest {
-    private fun repository(server: MockWebServer): ExternalCatalogRepository =
-        ExternalCatalogRepository(Retrofit.Builder()
-            .baseUrl(server.url("/"))
-            .addConverterFactory(GsonConverterFactory.create())
-            .build().create(ExternalCatalogApi::class.java))
+    private fun repository(server: MockWebServer, rate: Double? = 950.0): ExternalCatalogRepository =
+        ExternalCatalogRepository(
+            api = Retrofit.Builder().baseUrl(server.url("/"))
+                .addConverterFactory(GsonConverterFactory.create())
+                .build().create(ExternalCatalogApi::class.java),
+            rateProvider = object : UsdClpRateProvider {
+                override suspend fun currentRate(): Double? = rate
+            }
+        )
 
-    @Test fun `parsea JSON y prepara borrador sin convertir precios`() = runBlocking {
+    @Test fun `parsea JSON y precarga el valor convertido a CLP`() = runBlocking {
         MockWebServer().use { server ->
             server.enqueue(MockResponse().setResponseCode(200).setBody("""
                 {"products":[{"id":101,"title":"Notebook portátil","description":"SSD 512 GB",
-                "brand":"Fabricante A","price":599.99}],"total":1}
+                "brand":"Fabricante A","price":599.99,"thumbnail":"https://example.com/photo.jpg"}],"total":1}
             """.trimIndent()))
 
             val products = repository(server).getProducts(ExternalCatalogCategory.LAPTOPS)
             assertEquals(1, products.size)
             assertEquals("Notebook portátil", products.single().name)
             assertEquals(599.99, products.single().priceUsd, 0.001)
+            assertEquals(569991L, products.single().priceClp)
+            assertEquals("https://example.com/photo.jpg", products.single().thumbnailUrl)
             assertEquals("/products/category/laptops?limit=20", server.takeRequest().path)
-
             val draft = products.single().toImportDraft()
             assertEquals("Computadores", draft.category)
             assertEquals("Fabricante A", draft.supplier)
-            assertEquals("", draft.priceClpText)
-            assertEquals("0", draft.quantityText)
+            assertEquals("569991", draft.priceClpText)
+            assertEquals("", draft.quantityText)
+        }
+    }
+
+    @Test fun `cotizacion no disponible no inventa precios`() = runBlocking {
+        MockWebServer().use { server ->
+            server.enqueue(MockResponse().setResponseCode(200).setBody("""
+                {"products":[{"id":1,"title":"Tablet","price":199.0}],"total":1}
+            """.trimIndent()))
+            val product = repository(server, rate = null).getProducts(ExternalCatalogCategory.TABLETS).single()
+            assertNull(product.priceClp)
+            assertEquals("", product.toImportDraft().priceClpText)
         }
     }
 

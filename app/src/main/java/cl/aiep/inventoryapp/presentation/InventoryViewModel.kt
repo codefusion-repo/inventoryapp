@@ -6,6 +6,7 @@ import androidx.lifecycle.viewModelScope
 import cl.aiep.inventoryapp.InventoryApplication
 import cl.aiep.inventoryapp.data.external.ExternalCatalogRepository
 import cl.aiep.inventoryapp.data.external.ExternalCatalogErrorMessages
+import cl.aiep.inventoryapp.data.external.UsdClpRateRepository
 import cl.aiep.inventoryapp.data.remote.FirestoreInventorySource
 import cl.aiep.inventoryapp.data.sync.SyncCoordinator
 import cl.aiep.inventoryapp.domain.ExternalCatalogCategory
@@ -26,7 +27,7 @@ import kotlinx.coroutines.tasks.await
 class InventoryViewModel(application: Application) : AndroidViewModel(application) {
     private val app = application as InventoryApplication
     private val local = app.repository
-    private val externalCatalog = ExternalCatalogRepository()
+    private val externalCatalog = ExternalCatalogRepository(rateProvider = UsdClpRateRepository(application))
     private var externalJob: Job? = null
     private val _ui = MutableStateFlow(
         InventoryUiState(
@@ -64,8 +65,8 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
     fun navigate(to: InventoryDestination) {
         val current = _ui.value
         val allowed = when {
-            current.isGuest -> InventoryDestination.PRODUCTOS
-            to == InventoryDestination.EXTERNOS && !current.canManage -> InventoryDestination.PRODUCTOS
+            current.isGuest && to !in listOf(InventoryDestination.PRODUCTOS, InventoryDestination.EXTERNOS) ->
+                InventoryDestination.PRODUCTOS
             else -> to
         }
         _ui.update { it.copy(destination = allowed) }
@@ -75,13 +76,11 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
     }
 
     fun selectExternalCategory(category: ExternalCatalogCategory) {
-        if (!_ui.value.canManage) return
         _ui.update { it.copy(externalCategory = category) }
         loadExternalProducts()
     }
 
     fun loadExternalProducts() {
-        if (!_ui.value.canManage) return
         externalJob?.cancel()
         val category = _ui.value.externalCategory
         externalJob = viewModelScope.launch {
@@ -217,12 +216,8 @@ class InventoryViewModel(application: Application) : AndroidViewModel(applicatio
             startGuestSession()
             return
         }
-        if (role != cl.aiep.inventoryapp.domain.InventoryRole.ALMACEN) externalJob?.cancel()
         _ui.update { it.copy(userEmail = email, role = role, authError = null,
             destination = InventoryDestination.PRODUCTOS,
-            externalProducts = if (role == cl.aiep.inventoryapp.domain.InventoryRole.ALMACEN) it.externalProducts else emptyList(),
-            externalLoaded = role == cl.aiep.inventoryapp.domain.InventoryRole.ALMACEN && it.externalLoaded,
-            externalLoading = false,
             syncStatus = "Actualizando tus productos…") }
         activateCoordinator(uid, role, InventoryPermissions.canEditQuantity(role))
         _ui.update { it.copy(cloudSessionActive = true) }

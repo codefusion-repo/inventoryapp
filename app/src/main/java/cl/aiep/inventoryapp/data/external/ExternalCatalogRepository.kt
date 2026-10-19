@@ -7,17 +7,29 @@ import java.io.IOException
 import java.net.SocketTimeoutException
 import java.net.UnknownHostException
 import java.util.concurrent.TimeUnit
+import kotlin.coroutines.cancellation.CancellationException
+import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
 import okhttp3.OkHttpClient
 import retrofit2.HttpException
 import retrofit2.Retrofit
 import retrofit2.converter.gson.GsonConverterFactory
 
-/** Solo lectura de un servicio público de demostración; nunca escribe en Firebase. */
-class ExternalCatalogRepository(private val api: ExternalCatalogApi = defaultApi) {
-    suspend fun getProducts(category: ExternalCatalogCategory): List<ExternalCatalogProduct> {
+/** Consulta el proveedor externo. Una falla de cotización no impide ver los artículos. */
+class ExternalCatalogRepository(
+    private val api: ExternalCatalogApi = defaultApi,
+    private val rateProvider: UsdClpRateProvider
+) {
+    suspend fun getProducts(category: ExternalCatalogCategory): List<ExternalCatalogProduct> = coroutineScope {
+        val rate = async {
+            try { rateProvider.currentRate() }
+            catch (error: CancellationException) { throw error }
+            catch (_: Exception) { null }
+        }
         val response = api.productsByCategory(category.slug)
         val products = response.products ?: throw InvalidExternalResponseException()
-        return products.mapNotNull { it.toDomain(category) }
+        val clpPerUsd = rate.await()
+        products.mapNotNull { it.toDomain(category, clpPerUsd) }
     }
 
     companion object {
@@ -27,36 +39,33 @@ class ExternalCatalogRepository(private val api: ExternalCatalogApi = defaultApi
                 .readTimeout(15, TimeUnit.SECONDS)
                 .callTimeout(20, TimeUnit.SECONDS)
                 .build()
-            Retrofit.Builder()
-                .baseUrl("https://dummyjson.com/")
-                .client(client)
+            Retrofit.Builder().baseUrl("https://dummyjson.com/").client(client)
                 .addConverterFactory(GsonConverterFactory.create())
-                .build()
-                .create(ExternalCatalogApi::class.java)
+                .build().create(ExternalCatalogApi::class.java)
         }
     }
 }
 
 class InvalidExternalResponseException : IllegalStateException("JSON externo no compatible")
 
-/** No se expone al usuario información interna de la librería o infraestructura. */
+/** Mensajes útiles sin exponer excepciones ni datos internos del servicio. */
 object ExternalCatalogErrorMessages {
     fun explain(error: Throwable): String = when (error) {
         is UnknownHostException, is SocketTimeoutException ->
-            "No pudimos contactar al catálogo externo. Revisa tu conexión y vuelve a intentarlo."
+            "No pudimos cargar los productos. Comprueba tu conexión e inténtalo otra vez."
         is HttpException -> when (error.code()) {
-            429 -> "El servicio está recibiendo demasiadas consultas. Intenta de nuevo en unos minutos."
-            in 500..599 -> "El catálogo externo no está disponible por el momento. Vuelve a intentarlo más tarde."
-            else -> "No pudimos consultar el catálogo externo (HTTP ${error.code()})."
+            429 -> "Estamos recibiendo muchas solicitudes. Prueba nuevamente en unos minutos."
+            in 500..599 -> "El catálogo no está disponible por ahora. Vuelve a intentarlo más tarde."
+            else -> "No pudimos cargar los productos en este momento."
         }
         is InvalidExternalResponseException, is JsonParseException ->
-            "El servicio respondió con datos que no pudimos interpretar. Intenta más tarde."
-        is IOException -> "No pudimos completar la consulta. Verifica tu conexión e inténtalo nuevamente."
-        else -> "No se pudo cargar el catálogo externo. Vuelve a intentarlo."
+            "Recibimos información incompleta. Intenta actualizar el catálogo."
+        is IOException -> "Se interrumpió la consulta. Revisa tu conexión y vuelve a intentarlo."
+        else -> "Ocurrió un problema al cargar los productos. Inténtalo de nuevo."
     }
 }
 
-private fun ExternalProductDto.toDomain(category: ExternalCatalogCategory): ExternalCatalogProduct? {
+private fun ExternalProductDto.toDomain(category: ExternalCatalogCategory, rate: Double?): ExternalCatalogProduct? {
     val validatedId = id?.takeIf { it > 0 } ?: return null
     val validatedName = title?.trim()?.takeIf { it.isNotBlank() } ?: return null
     val validatedPrice = price?.takeIf { it.isFinite() && it >= 0.0 } ?: return null
@@ -66,6 +75,9 @@ private fun ExternalProductDto.toDomain(category: ExternalCatalogCategory): Exte
         description = description.orEmpty().trim(),
         supplier = brand?.trim()?.takeIf { it.isNotBlank() } ?: "Proveedor por confirmar",
         priceUsd = validatedPrice,
-        category = category
+        category = category,
+        priceClp = ChileanPriceConverter.toClp(validatedPrice, rate),
+        thumbnailUrl = thumbnail?.takeIf { it.startsWith("https://") },
+        rating = rating?.takeIf { it.isFinite() && it in 0.0..5.0 }
     )
 }

@@ -11,6 +11,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
+import androidx.compose.material.icons.automirrored.filled.Login
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -32,7 +33,6 @@ import cl.aiep.inventoryapp.domain.InventoryValidation
 import cl.aiep.inventoryapp.presentation.theme.*
 import java.text.NumberFormat
 import java.util.Locale
-import androidx.compose.material.icons.automirrored.filled.Login
 
 private val categories = listOf("Todos", "Computadores", "Accesorios", "Audio", "Otros")
 private fun money(value: Long) = "${'$'}" + NumberFormat.getIntegerInstance(Locale.forLanguageTag("es-CL")).format(value)
@@ -64,15 +64,15 @@ fun InventoryScreen(vm: InventoryViewModel) {
         containerColor = Pale,
         snackbarHost = { SnackbarHost(snack) },
         bottomBar = {
-            if (!ui.isGuest) NavigationBar(containerColor = Color.White) {
-                val tabs = listOf(
-                    Triple(InventoryDestination.RESUMEN, "Resumen", Icons.Default.Home),
-                    Triple(InventoryDestination.PRODUCTOS, "Productos", Icons.Default.Inventory2)
-                ) + (if (ui.canManage) listOf(
-                    Triple(InventoryDestination.EXTERNOS, "Externos", Icons.Default.CloudDownload)
-                ) else emptyList()) + listOf(
+            NavigationBar(containerColor = Color.White) {
+                val tabs = (if (ui.isGuest) emptyList() else listOf(
+                    Triple(InventoryDestination.RESUMEN, "Resumen", Icons.Default.Home)
+                )) + listOf(
+                    Triple(InventoryDestination.PRODUCTOS, "Productos", Icons.Default.Inventory2),
+                    Triple(InventoryDestination.EXTERNOS, "Explorar", Icons.Default.CloudDownload)
+                ) + (if (ui.isGuest) emptyList() else listOf(
                     Triple(InventoryDestination.CUENTA, "Cuenta", Icons.Default.Person)
-                )
+                ))
                 tabs.forEach { (to, label, icon) ->
                     NavigationBarItem(
                         selected = ui.destination == to,
@@ -114,14 +114,14 @@ fun InventoryScreen(vm: InventoryViewModel) {
                     onQuantity = { editingQuantity = it },
                     onEdit = { product -> editing = product; importing = null; editorVisible = true },
                     onDelete = { product -> deleting = product }, onDetail = { detail = it })
-                InventoryDestination.EXTERNOS -> if (ui.canManage) {
+                InventoryDestination.EXTERNOS -> {
                     ExternalCatalogScreen(ui,
                         selectCategory = vm::selectExternalCategory,
                         retry = vm::loadExternalProducts,
                         importProduct = { product ->
                             editing = null
                             importing = product.toImportDraft()
-                            editorVisible = true
+                            editorVisible = false
                         })
                 }
                 InventoryDestination.CUENTA -> AccountContent(ui, vm, onLogin = { showLogin = true })
@@ -136,14 +136,25 @@ fun InventoryScreen(vm: InventoryViewModel) {
     )
 
     if (editorVisible && ui.canManage) {
-        ProductEditor(product = editing, draft = importing,
-            onDismiss = { editorVisible = false; importing = null },
+        ProductEditor(product = editing,
+            onDismiss = { editorVisible = false },
             onSave = { name, description, category, supplier, qty, price ->
                 vm.save(editing?.id, name, description, category, supplier, qty, price)
                 editorVisible = false
-                if (importing != null) vm.navigate(InventoryDestination.PRODUCTOS)
-                importing = null
             })
+    }
+    importing?.takeIf { ui.canManage }?.let { draft ->
+        ImportConfirmationDialog(
+            draft = draft,
+            alreadyExists = ui.products.any { it.nombre.equals(draft.name, ignoreCase = true)
+                && it.categoria == draft.category },
+            onDismiss = { importing = null },
+            onConfirm = { quantity, price ->
+                vm.save(null, draft.name, draft.description, draft.category, draft.supplier, quantity, price)
+                importing = null
+                vm.navigate(InventoryDestination.PRODUCTOS)
+            }
+        )
     }
 
     editingQuantity?.takeIf { ui.canUseStockShortcut }?.let { product ->
@@ -524,47 +535,25 @@ private fun QuantityEditor(product: InventoryProduct, onDismiss: () -> Unit, onS
 }
 
 @Composable
-private fun ProductEditor(product: InventoryProduct?, draft: ExternalImportDraft? = null,
+private fun ProductEditor(product: InventoryProduct?,
     onDismiss: () -> Unit,
     onSave: (String, String, String, String, String, String) -> Unit
 ) {
-    var name by remember(product?.id, draft?.externalId) {
-        mutableStateOf(product?.nombre ?: draft?.name ?: "")
-    }
-    var description by remember(product?.id, draft?.externalId) {
-        mutableStateOf(product?.descripcion ?: draft?.description ?: "")
-    }
-    var supplier by remember(product?.id, draft?.externalId) {
-        mutableStateOf(product?.proveedor ?: draft?.supplier ?: "")
-    }
-    var category by remember(product?.id, draft?.externalId) {
-        mutableStateOf(product?.categoria ?: draft?.category ?: "Accesorios")
-    }
-    var quantity by remember(product?.id, draft?.externalId) {
-        mutableStateOf(product?.cantidad?.toString() ?: draft?.quantityText ?: "0")
-    }
-    var price by remember(product?.id, draft?.externalId) {
-        mutableStateOf(product?.precioClp?.toString() ?: draft?.priceClpText ?: "0")
-    }
-    val error = if (draft != null && price.isBlank())
-        "Ingresa el precio de venta en pesos chilenos antes de incorporar el producto."
-    else if (quantity.toIntOrNull() == null || price.toLongOrNull() == null)
+    var name by remember(product?.id) { mutableStateOf(product?.nombre ?: "") }
+    var description by remember(product?.id) { mutableStateOf(product?.descripcion ?: "") }
+    var supplier by remember(product?.id) { mutableStateOf(product?.proveedor ?: "") }
+    var category by remember(product?.id) { mutableStateOf(product?.categoria ?: "Accesorios") }
+    var quantity by remember(product?.id) { mutableStateOf(product?.cantidad?.toString() ?: "0") }
+    var price by remember(product?.id) { mutableStateOf(product?.precioClp?.toString() ?: "0") }
+    val error = if (quantity.toIntOrNull() == null || price.toLongOrNull() == null)
         "Cantidad y precio deben ser números enteros."
     else InventoryValidation.validate(name, supplier, quantity.toInt(), price.toLong())
 
     AlertDialog(onDismissRequest = onDismiss,
-        title = { Text(when {
-            product != null -> "Editar producto"
-            draft != null -> "Incorporar producto"
-            else -> "Nuevo producto"
-        }) },
+        title = { Text(if (product != null) "Editar producto" else "Nuevo producto") },
         text = {
             Column(Modifier.fillMaxWidth().heightIn(max = 410.dp).verticalScroll(rememberScrollState()),
                 verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                if (draft != null) Text(
-                    "Producto consultado por REST/JSON. Confirma el precio en CLP y las existencias; no se convierte USD automáticamente.",
-                    fontSize = 12.sp, color = Teal
-                )
                 OutlinedTextField(name, { name = it }, label = { Text("Nombre") }, modifier = Modifier.fillMaxWidth(), singleLine = true)
                 OutlinedTextField(description, { description = it }, label = { Text("Descripción") },
                     modifier = Modifier.fillMaxWidth(), maxLines = 2)
@@ -573,11 +562,8 @@ private fun ProductEditor(product: InventoryProduct?, draft: ExternalImportDraft
                 Text("Categoría", style = MaterialTheme.typography.labelMedium)
                 LazyRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                     items(categories.drop(1)) { cat ->
-                        FilterChip(
-                            selected = category == cat,
-                            onClick = { category = cat },
-                            label = { Text(cat) }
-                        )
+                        FilterChip(selected = category == cat, onClick = { category = cat },
+                            label = { Text(cat) })
                     }
                 }
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -599,3 +585,56 @@ private fun ProductEditor(product: InventoryProduct?, draft: ExternalImportDraft
         dismissButton = { TextButton(onClick = onDismiss) { Text("Cancelar") } })
 }
 
+@Composable
+private fun ImportConfirmationDialog(
+    draft: ExternalImportDraft,
+    alreadyExists: Boolean,
+    onDismiss: () -> Unit,
+    onConfirm: (String, String) -> Unit
+) {
+    var quantity by remember(draft.externalId) { mutableStateOf(draft.quantityText) }
+    var price by remember(draft.externalId) { mutableStateOf(draft.priceClpText) }
+    val quantityValue = quantity.toIntOrNull()
+    val priceValue = price.toLongOrNull()
+    val valid = !alreadyExists && quantityValue != null && quantityValue >= 0 &&
+        priceValue != null && priceValue > 0
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Añadir al inventario") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                Text(draft.name, fontWeight = FontWeight.Bold, color = Navy)
+                Text("${draft.supplier} · ${draft.category}", color = Teal,
+                    style = MaterialTheme.typography.bodySmall)
+                Text("Confirma el precio de venta y las unidades disponibles.",
+                    style = MaterialTheme.typography.bodySmall)
+                OutlinedTextField(
+                    value = price, onValueChange = { price = it },
+                    label = { Text("Precio de venta (CLP)") },
+                    singleLine = true,
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                    modifier = Modifier.fillMaxWidth()
+                )
+                OutlinedTextField(
+                    value = quantity, onValueChange = { quantity = it },
+                    label = { Text("Unidades iniciales") },
+                    singleLine = true,
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                    modifier = Modifier.fillMaxWidth()
+                )
+                if (alreadyExists) Text("Este producto ya figura en el inventario.",
+                    color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
+                else if (draft.priceClpText.isBlank()) Text(
+                    "No pudimos estimar el precio. Ingresa el valor en CLP para continuar.",
+                    color = Teal, style = MaterialTheme.typography.bodySmall)
+                else if (!valid) Text("Revisa el precio y la cantidad para continuar.",
+                    color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
+            }
+        },
+        confirmButton = {
+            Button(enabled = valid, onClick = { onConfirm(quantity, price) }) { Text("Añadir producto") }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancelar") } }
+    )
+}
